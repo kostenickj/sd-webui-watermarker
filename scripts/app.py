@@ -2,27 +2,43 @@ import modules.scripts as scripts
 import gradio as gr
 
 from modules import images
-from modules.processing import process_images, Processed
+from modules.processing import StableDiffusionProcessing, process_images, Processed
 from modules.processing import Processed
 from modules.shared import opts
+from modules import script_callbacks
 from PIL import Image
 
-class Script(scripts.Script):  
+class WaterMarkerScript(scripts.Script):  
+
+    img2img_batch_output_dir:str = None
     def title(self):
         return "Watermarker"
 
     def show(self, is_img2img):
         return True
+    
+    @staticmethod
+    def on_batch_dir_change(value:str, x, y):
+        WaterMarkerScript.img2img_batch_output_dir = value
+        return value
+    
+    @staticmethod
+    def on_after_component_callback(component, **_kwargs):
+        if component.elem_id == 'img2img_batch_output_dir':
+            with gr.Blocks():
+                c: gr.Textbox = component
+                c.blur(fn= WaterMarkerScript.on_batch_dir_change, inputs=[component])
 
     def ui(self, is_img2img):
-        logo = gr.Image(label="Watermark Source", show_label=True, source="upload", interactive=True, type="pil",image_mode="RGBA", elem_id="watermarker_logo")
-        overwrite = gr.Checkbox(False, label="Overwrite", elem_id="watermarker_logo_overwrite")
-        alpha = gr.Slider(value=0.5, maximum=1, minimum=0.01, step=0.01 ,interactive=True ,label="Transparency", elem_id="watermarker_logo_alpha")
-        scale = gr.Slider(value=0.5, maximum=1, minimum=0.1, step=0.01 ,interactive=True ,label="Scale", elem_id="watermarker_logo_scale")
-        position = gr.Dropdown(choices=["Top Left", "Top Right", "Bottom Left", 'Bottom right', 'Center'], label="Position", value="Bottom Left", elem_id="watermarker_logo_position")
-        return [logo, overwrite, alpha, position, scale]
-  
-    def run(self, p, _original_logo: Image, overwrite: bool, alpha: float, position: str, scale: float):
+        with gr.Blocks():
+            logo = gr.Image(label="Watermark Source", show_label=True, source="upload", interactive=True, type="pil",image_mode="RGBA", elem_id="watermarker_logo")
+            overwrite = gr.Checkbox(False, label="Overwrite", elem_id="watermarker_logo_overwrite")
+            alpha = gr.Slider(value=0.5, maximum=1, minimum=0.01, step=0.01 ,interactive=True ,label="Transparency", elem_id="watermarker_logo_alpha")
+            scale = gr.Slider(value=0.5, maximum=1, minimum=0.1, step=0.01 ,interactive=True ,label="Scale", elem_id="watermarker_logo_scale")
+            position = gr.Dropdown(choices=["Top Left", "Top Right", "Bottom Left", 'Bottom right', 'Center'], label="Position", value="Bottom Left", elem_id="watermarker_logo_position")
+            return [logo, overwrite, alpha, position, scale]
+    
+    def run(self, p: StableDiffusionProcessing, _original_logo: Image, overwrite: bool, alpha: float, position: str, scale: float):
         def add_wm(im: Image, padding = 0):
 
             logo: Image = _original_logo.copy()
@@ -58,16 +74,34 @@ class Script(scripts.Script):
             with_wm.alpha_composite(logo, (pos_x, pos_y))
             return with_wm
 
+        if not _original_logo:
+            print('no watermark found, cancelling')
+            proc = process_images(p)
+            return proc
+
         if(overwrite):
             p.do_not_save_samples = True
 
         proc = process_images(p)
-        if not _original_logo:
-            return proc
+        print(WaterMarkerScript.img2img_batch_output_dir)
 
+        
+        print('adding watermark')
         # dewwit
         for i in range(len(proc.images)):
             proc.images[i] = add_wm(proc.images[i])
-            images.save_image(proc.images[i], p.outpath_samples, proc.seed + i, proc.prompt, opts.samples_format, info= proc.info, p=p, suffix="" if overwrite else "_WM")
+            images.save_image(
+                proc.images[i], 
+                p.outpath_samples, 
+                proc.seed + i, 
+                proc.prompt, 
+                opts.samples_format, 
+                info= proc.info, 
+                p=p, 
+                suffix="" if overwrite else "_WM"
+            )
 
         return proc
+    
+
+script_callbacks.on_after_component(WaterMarkerScript.on_after_component_callback)
